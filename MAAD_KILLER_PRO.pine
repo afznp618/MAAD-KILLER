@@ -1,0 +1,136 @@
+
+ //@version=6
+strategy("MAAD-KILLER PRO | XAUUSD V1", overlay=true, initial_capital=10000, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, process_orders_on_close=true)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SETTINGS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupTrend = "01 - Trend"
+emaFastLen = input.int(50, "Fast EMA", minval=1, group=groupTrend)
+emaSlowLen = input.int(200, "Slow EMA", minval=1, group=groupTrend)
+
+groupMomentum = "02 - Momentum"
+rsiLen = input.int(14, "RSI Length", minval=1, group=groupMomentum)
+rsiBuy = input.float(52, "RSI Buy Level", group=groupMomentum)
+rsiSell = input.float(48, "RSI Sell Level", group=groupMomentum)
+macdFast = input.int(12, "MACD Fast", group=groupMomentum)
+macdSlow = input.int(26, "MACD Slow", group=groupMomentum)
+macdSignal = input.int(9, "MACD Signal", group=groupMomentum)
+
+groupStrength = "03 - Trend Strength"
+adxLen = input.int(14, "ADX Length", group=groupStrength)
+adxMin = input.float(20, "Minimum ADX", group=groupStrength)
+
+groupRisk = "04 - Risk Management"
+atrLen = input.int(14, "ATR Length", group=groupRisk)
+slMultiplier = input.float(1.5, "Stop Loss ATR", minval=0.1, step=0.1, group=groupRisk)
+tpMultiplier = input.float(2.5, "Take Profit ATR", minval=0.1, step=0.1, group=groupRisk)
+riskPercent = input.float(0.5, "Risk Per Trade (%)", minval=0.1, maxval=2.0, step=0.1, group=groupRisk)
+maxQty = input.float(1.0, "Maximum Strategy Quantity", minval=0.001, group=groupRisk)
+
+groupFilter = "05 - Filters"
+useSupertrend = input.bool(true, "Use Supertrend Filter", group=groupFilter)
+stFactor = input.float(3.0, "Supertrend Factor", group=groupFilter)
+stPeriod = input.int(10, "Supertrend ATR Period", group=groupFilter)
+useSession = input.bool(false, "Use Trading Session Filter", group=groupFilter)
+tradeSession = input.session("0700-2200", "Trading Session", group=groupFilter)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// INDICATORS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+rsiValue = ta.rsi(close, rsiLen)
+
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+[plusDI, minusDI, adxValue] = ta.dmi(adxLen, adxLen)
+
+atrValue = ta.atr(atrLen)
+
+[stLine, stDirection] = ta.supertrend(stFactor, stPeriod)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARKET CONDITIONS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bullTrend = close > emaFast and emaFast > emaSlow
+bearTrend = close < emaFast and emaFast < emaSlow
+
+bullMomentum = rsiValue >= rsiBuy and macdLine > signalLine and histLine > 0
+bearMomentum = rsiValue <= rsiSell and macdLine < signalLine and histLine < 0
+
+bullStrength = adxValue >= adxMin and plusDI > minusDI
+bearStrength = adxValue >= adxMin and minusDI > plusDI
+
+bullSupertrend = not useSupertrend or stDirection < 0
+bearSupertrend = not useSupertrend or stDirection > 0
+
+sessionOK = not useSession or not na(time(timeframe.period, tradeSession))
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ENTRY SIGNALS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buySignal = bullTrend and bullMomentum and bullStrength and bullSupertrend and sessionOK
+sellSignal = bearTrend and bearMomentum and bearStrength and bearSupertrend and sessionOK
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// POSITION SIZING
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+stopDistance = atrValue * slMultiplier
+riskCash = strategy.equity * riskPercent / 100
+
+riskQty = stopDistance > 0 and syminfo.pointvalue > 0 ? riskCash / (stopDistance * syminfo.pointvalue) : 0.0
+
+orderQty = math.min(riskQty, maxQty)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TRADE EXECUTION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var float tradeATR = na
+
+canEnter = strategy.position_size == 0 and orderQty > 0 and not na(atrValue)
+
+if barstate.isconfirmed and canEnter
+    if buySignal
+        tradeATR := atrValue
+        strategy.entry("BUY", strategy.long, qty=orderQty)
+        alert("MAAD-KILLER PRO: BUY | " + syminfo.ticker + " | Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+
+    else if sellSignal
+        tradeATR := atrValue
+        strategy.entry("SELL", strategy.short, qty=orderQty)
+        alert("MAAD-KILLER PRO: SELL | " + syminfo.ticker + " | Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// STOP LOSS AND TAKE PROFIT
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if strategy.position_size > 0 and not na(tradeATR)
+    longSL = strategy.position_avg_price - tradeATR * slMultiplier
+    longTP = strategy.position_avg_price + tradeATR * tpMultiplier
+    strategy.exit("BUY EXIT", from_entry="BUY", stop=longSL, limit=longTP)
+
+if strategy.position_size < 0 and not na(tradeATR)
+    shortSL = strategy.position_avg_price + tradeATR * slMultiplier
+    shortTP = strategy.position_avg_price - tradeATR * tpMultiplier
+    strategy.exit("SELL EXIT", from_entry="SELL", stop=shortSL, limit=shortTP)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    tradeATR := na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CHART DISPLAY
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+plot(emaFast, "EMA 50", color=color.orange, linewidth=2)
+plot(emaSlow, "EMA 200", color=color.blue, linewidth=2)
+plot(useSupertrend ? stLine : na, "Supertrend", color=stDirection < 0 ? color.green : color.red, linewidth=2)
+
+plotshape(buySignal and canEnter and barstate.isconfirmed, title="BUY Signal", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.small)
+
+plotshape(sellSignal and canEnter and barstate.isconfirmed, title="SELL Signal", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL", textcolor=color.white, size=size.small)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ALERT CONDITIONS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+alertcondition(buySignal and barstate.isconfirmed, title="MAAD BUY", message="MAAD-KILLER PRO BUY signal")
+alertcondition(sellSignal and barstate.isconfirmed, title="MAAD SELL", message="MAAD-KILLER PRO SELL signal")
